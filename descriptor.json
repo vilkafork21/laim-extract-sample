@@ -1,0 +1,89 @@
+{
+  "id": "7d9c1b7e-4a52-4b0e-9a37-c4f0f3ad61b5",
+  "name": "LAIM Extract Sample",
+  "description": "Детерминированное сэмплирование UMR перед LLM-ассесором",
+  "fullDescription": "Нода ставится между конвертером трейсов (выход monitoring_umr) и LAIM Asessor Agent (вход monitoring_umr): пропускает не более заданного числа примеров, схему и содержимое строк не меняет. Пример — turn диалога: в packed-форме (колонка dialogue) это элемент списка turns, в плоской — строка датафрейма. Отбор равномерный и воспроизводимый: сессии ранжируются по sha256 от зерна и идентификатора и набираются, пока влезают в лимит целиком; диалог не режется (packed-строка всегда берётся целиком; для плоской формы это отключается настройкой). Если примеров на входе не больше лимита или лимит равен 0 — выборка передаётся без изменений.",
+  "shortNameToDisplay": "Extract Sample",
+  "shape": "other",
+  "ports": [
+    {
+      "in": true,
+      "name": "monitoring_umr",
+      "label": "Monitoring UMR",
+      "description": "Полный UMR от конвертера трейсов",
+      "order": 1,
+      "type": "dataframe",
+      "required": true
+    },
+    {
+      "in": false,
+      "name": "monitoring_umr_sample",
+      "label": "Monitoring UMR (sample)",
+      "description": "Не более заданного числа примеров; подключить ко входу monitoring_umr ассесора",
+      "order": 2,
+      "type": "dataframe"
+    }
+  ],
+  "script": {
+    "type": "python",
+    "baseImageKey": "py312-simple",
+    "deployType": "docker",
+    "runConfiguration": {
+      "libraryDependencies": [
+        "requirements.txt"
+      ],
+      "sourceFiles": [
+        "main.py"
+      ],
+      "functionName": "main",
+      "functionParameters": [],
+      "output": {
+        "type": "json",
+        "output": []
+      }
+    }
+  },
+  "ui": {
+    "settings": [
+      {
+        "page": "General",
+        "title": "Сэмплирование",
+        "components": [
+          {
+            "type": "form",
+            "label": "Объём выборки ассесора",
+            "config": {
+              "components": [
+                {
+                  "parameter": "sample_size",
+                  "label": "Примеров ассесору (0 = все)",
+                  "uiComponent": "input",
+                  "type": "integer",
+                  "defaultValue": 1500
+                },
+                {
+                  "parameter": "seed",
+                  "label": "Зерно детерминированного отбора",
+                  "uiComponent": "input",
+                  "type": "integer",
+                  "defaultValue": 42
+                },
+                {
+                  "parameter": "whole_sessions",
+                  "label": "Не резать диалог: отбирать сессии целиком",
+                  "uiComponent": "checkbox",
+                  "type": "boolean",
+                  "defaultValue": true
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "result": {
+      "title": "Результат",
+      "components": []
+    }
+  }
+}
