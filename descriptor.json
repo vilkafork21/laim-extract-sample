@@ -13,6 +13,7 @@
       "description": "Полный UMR от конвертера трейсов",
       "order": 1,
       "type": "dataframe",
+      "shape": "shape_dataframe",
       "required": true
     },
     {
@@ -21,7 +22,8 @@
       "label": "Monitoring UMR (sample)",
       "description": "Не более заданного числа примеров; подключить ко входу monitoring_umr ассесора",
       "order": 2,
-      "type": "dataframe"
+      "type": "dataframe",
+      "shape": "shape_dataframe"
     }
   ],
   "script": {
@@ -59,7 +61,7 @@
                   "label": "Примеров ассесору (0 = все)",
                   "uiComponent": "input",
                   "type": "integer",
-                  "defaultValue": 1500
+                  "defaultValue": 1000
                 },
                 {
                   "parameter": "seed",

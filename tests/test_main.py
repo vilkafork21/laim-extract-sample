@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import inspect
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -64,6 +67,40 @@ def test_packed_limit_counts_turns():
     assert 1 <= len(result) < len(frame)
 
 
+def test_packed_repr_from_converter_counts_turns():
+    frame = packed_umr({"s1": 3, "s2": 3, "s3": 3, "s4": 3})
+    frame["dialogue"] = frame["dialogue"].map(repr)
+
+    result = node.main(monitoring_umr=frame, sample_size=7)["monitoring_umr_sample"]
+
+    assert sum(len(ast.literal_eval(dialogue)) for dialogue in result["dialogue"]) <= 7
+    assert 1 <= len(result) < len(frame)
+
+
+def test_invalid_packed_dialogue_fails_closed():
+    frame = pd.DataFrame({"session_id": ["s1"], "dialogue": ["not a turns list"]})
+
+    with pytest.raises(ValueError, match="список turns"):
+        node.main(monitoring_umr=frame, sample_size=1)
+
+
+def test_oversized_session_does_not_block_smaller_session():
+    frame = packed_umr({"large": 4, "small": 2})
+
+    result = node.main(
+        monitoring_umr=frame, sample_size=2, seed=0
+    )["monitoring_umr_sample"]
+
+    assert result["session_id"].tolist() == ["small"]
+
+
+def test_only_oversized_session_fails_loudly():
+    frame = packed_umr({"large": 4})
+
+    with pytest.raises(ValueError, match="меньше самой маленькой"):
+        node.main(monitoring_umr=frame, sample_size=2)
+
+
 def test_deterministic_and_seed_sensitive():
     frame = flat_umr({f"s{i}": 1 for i in range(20)})
     first = node.main(monitoring_umr=frame, sample_size=5, seed=1)["monitoring_umr_sample"]
@@ -86,6 +123,16 @@ def test_rows_mode_exact_size():
         monitoring_umr=frame, sample_size=3, whole_sessions=False
     )["monitoring_umr_sample"]
     assert len(result) == 3
+
+
+def test_deployed_default_caps_large_flat_umr():
+    frame = flat_umr({f"s{i}": 1 for i in range(1200)})
+
+    result = node.main(
+        monitoring_umr=frame, whole_sessions=False
+    )["monitoring_umr_sample"]
+
+    assert len(result) == 1000
 
 
 def test_original_row_order_preserved():
@@ -116,3 +163,17 @@ def test_unknown_format_rejected():
     frame = pd.DataFrame({"foo": [1, 2]})
     with pytest.raises(ValueError, match="dialogue|query_id"):
         node.main(monitoring_umr=frame, sample_size=1)
+
+
+def test_descriptor_matches_deployed_sampling_contract():
+    descriptor = json.loads(
+        (Path(__file__).resolve().parents[1] / "descriptor.json").read_text("utf-8")
+    )
+    ports = {port["name"]: port for port in descriptor["ports"]}
+    settings = descriptor["ui"]["settings"][0]["components"][0]["config"]["components"]
+    sample_size = next(item for item in settings if item["parameter"] == "sample_size")
+
+    assert inspect.signature(node.main).parameters["sample_size"].default == 1000
+    assert sample_size["defaultValue"] == 1000
+    assert ports["monitoring_umr"]["shape"] == "shape_dataframe"
+    assert ports["monitoring_umr_sample"]["shape"] == "shape_dataframe"

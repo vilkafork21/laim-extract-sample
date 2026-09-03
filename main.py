@@ -14,6 +14,7 @@ whole_sessions=true диалог не режется). Результат не �
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import logging
@@ -84,13 +85,14 @@ def _blank(value: object) -> bool:
 
 
 def _dialogue_len(cell: object, row_number: int) -> int:
+    if isinstance(cell, str):
+        try:
+            cell = ast.literal_eval(cell)
+        except (SyntaxError, ValueError):
+            _fail(f"dialogue в строке {row_number} не разбирается как список turns")
     if isinstance(cell, (list, tuple)) or hasattr(cell, "__len__") and not isinstance(cell, str):
         return max(len(cell), 1)
-    logger.warning(
-        "dialogue в строке %d не является списком turns — строка считается одним примером",
-        row_number,
-    )
-    return 1
+    _fail(f"dialogue в строке {row_number} должен быть списком turns")
 
 
 def _sampling_units(
@@ -151,7 +153,7 @@ def _select_positions(
     budget = sample_size
     for _, positions, examples in ranked:
         if examples > budget:
-            break
+            continue
         selected.extend(positions)
         budget -= examples
         taken_examples += examples
@@ -161,7 +163,7 @@ def _select_positions(
 
 def main(
     monitoring_umr: object = None,
-    sample_size: int = 1500,
+    sample_size: int = 1000,
     seed: int = 42,
     whole_sessions: bool = True,
     **_ignored: object,
@@ -196,8 +198,7 @@ def main(
         taken_units, len(units), seed_value,
     )
     if not positions:
-        logger.warning(
-            "лимит %d меньше самой маленькой сессии — на выход не прошло ни одного примера",
-            size,
+        _fail(
+            f"лимит {size} меньше самой маленькой целой сессии"
         )
     return {"monitoring_umr_sample": result}
