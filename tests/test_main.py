@@ -177,3 +177,36 @@ def test_descriptor_matches_deployed_sampling_contract():
     assert sample_size["defaultValue"] == 1000
     assert ports["monitoring_umr"]["shape"] == "shape_dataframe"
     assert ports["monitoring_umr_sample"]["shape"] == "shape_dataframe"
+
+
+def test_sample_meta_reports_population_and_selection():
+    frame = flat_umr({f"s{i}": 1 for i in range(20)})
+    passthrough = node.main(monitoring_umr=frame, sample_size=50)
+    assert passthrough["sample_meta"] == {
+        "unit": "session", "population_units": 20, "population_examples": 20,
+        "sampled_units": 20, "sampled_examples": 20, "fraction": 1.0,
+        "sample_size": 50, "seed": 42, "whole_sessions": True, "passthrough": True,
+    }
+    sampled = node.main(monitoring_umr=frame, sample_size=5, seed=7)
+    meta = sampled["sample_meta"]
+    assert meta["passthrough"] is False and meta["seed"] == 7
+    assert meta["sampled_examples"] == len(sampled["monitoring_umr_sample"]) == 5
+    assert meta["population_examples"] == 20 and meta["fraction"] == 0.25
+
+    packed = node.main(monitoring_umr=packed_umr({"s1": 3, "s2": 3}), sample_size=0)
+    assert packed["sample_meta"]["unit"] == "packed_dialogue"
+    assert packed["sample_meta"]["population_examples"] == 6
+    assert packed["sample_meta"]["passthrough"] is True
+
+    empty = node.main(monitoring_umr=pd.DataFrame(), sample_size=5)
+    assert empty["sample_meta"]["population_units"] == 0
+    assert empty["sample_meta"]["passthrough"] is True
+
+
+def test_descriptor_declares_sample_meta_port():
+    descriptor = json.loads(
+        (Path(__file__).resolve().parents[1] / "descriptor.json").read_text("utf-8")
+    )
+    ports = {port["name"]: port for port in descriptor["ports"]}
+    assert ports["sample_meta"]["in"] is False
+    assert ports["sample_meta"]["shape"] == "shape_model"

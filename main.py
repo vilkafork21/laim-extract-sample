@@ -97,8 +97,9 @@ def _dialogue_len(cell: object, row_number: int) -> int:
 
 def _sampling_units(
     frame: pd.DataFrame, whole_sessions: bool
-) -> list[tuple[str, list[int], int]]:
-    """Единицы отбора: (ключ хеширования, позиции строк, число примеров)."""
+) -> tuple[list[tuple[str, list[int], int]], str]:
+    """Единицы отбора: (ключ хеширования, позиции строк, число примеров) и вид
+    единицы: packed_dialogue / session / row."""
     if "dialogue" in frame.columns:
         # packed: строка = сессия целиком, независимо от whole_sessions.
         units = []
@@ -107,7 +108,7 @@ def _sampling_units(
             session = row["session_id"] if "session_id" in frame.columns else None
             key = f"row-{position}" if _blank(session) else str(session)
             units.append((key, [position], _dialogue_len(row["dialogue"], position + 1)))
-        return units
+        return units, "packed_dialogue"
     if "query_id" not in frame.columns:
         _fail(
             "monitoring_umr не соответствует ни packed (нет колонки dialogue), "
@@ -123,8 +124,9 @@ def _sampling_units(
             group = frame.iloc[position][group_column]
             key = f"row-{position}" if _blank(group) else str(group)
             units_by_key.setdefault(key, []).append(position)
-        return [(key, positions, len(positions)) for key, positions in units_by_key.items()]
-    return [
+        units = [(key, positions, len(positions)) for key, positions in units_by_key.items()]
+        return units, "session"
+    units = [
         (
             f"row-{position}"
             if _blank(frame.iloc[position]["query_id"])
@@ -134,6 +136,7 @@ def _sampling_units(
         )
         for position in range(len(frame))
     ]
+    return units, "row"
 
 
 def _select_positions(
@@ -161,34 +164,65 @@ def _select_positions(
     return sorted(selected), taken_examples, taken_units
 
 
+def _sample_meta(
+    *, unit: str, population_units: int, population_examples: int, sampled_units: int,
+    sampled_examples: int, size: int, seed: int, whole_sessions: bool, passthrough: bool,
+) -> dict[str, object]:
+    """Провенанс выборки для агрегатора и отчёта: что было и что отобрано."""
+    return {
+        "unit": unit,
+        "population_units": population_units,
+        "population_examples": population_examples,
+        "sampled_units": sampled_units,
+        "sampled_examples": sampled_examples,
+        "fraction": (sampled_examples / population_examples) if population_examples else 0.0,
+        "sample_size": size,
+        "seed": seed,
+        "whole_sessions": whole_sessions,
+        "passthrough": passthrough,
+    }
+
+
 def main(
     monitoring_umr: object = None,
     sample_size: int = 1000,
     seed: int = 42,
     whole_sessions: bool = True,
     **_ignored: object,
-) -> dict[str, pd.DataFrame]:
-    """Отдать ассесору не более sample_size примеров исходного UMR."""
+) -> dict[str, object]:
+    """Отдать ассесору не более sample_size примеров исходного UMR и провенанс выборки."""
     frame = _load_df(monitoring_umr)
     size = _parse_int(sample_size, "sample_size", minimum=0)
     seed_value = _parse_int(seed, "seed", minimum=-(2**63))
     keep_sessions = _parse_bool(whole_sessions, "whole_sessions")
 
-    if frame.empty or size == 0:
-        logger.info(
-            "сэмплирование пропущено: строк на входе %d, sample_size=%s",
-            len(frame), size or "все",
-        )
-        return {"monitoring_umr_sample": frame}
+    if frame.empty:
+        logger.info("сэмплирование пропущено: строк на входе нет")
+        return {
+            "monitoring_umr_sample": frame,
+            "sample_meta": _sample_meta(
+                unit="row", population_units=0, population_examples=0, sampled_units=0,
+                sampled_examples=0, size=size, seed=seed_value,
+                whole_sessions=keep_sessions, passthrough=True,
+            ),
+        }
 
-    units = _sampling_units(frame, keep_sessions)
+    units, unit_kind = _sampling_units(frame, keep_sessions)
     total_examples = sum(examples for _, _, examples in units)
-    if total_examples <= size:
+    if size == 0 or total_examples <= size:
         logger.info(
-            "примеров на входе %d <= лимита %d — выборка передана целиком",
-            total_examples, size,
+            "примеров на входе %d, лимит %s — выборка передана целиком",
+            total_examples, size or "нет",
         )
-        return {"monitoring_umr_sample": frame}
+        return {
+            "monitoring_umr_sample": frame,
+            "sample_meta": _sample_meta(
+                unit=unit_kind, population_units=len(units),
+                population_examples=total_examples, sampled_units=len(units),
+                sampled_examples=total_examples, size=size, seed=seed_value,
+                whole_sessions=keep_sessions, passthrough=True,
+            ),
+        }
 
     positions, taken_examples, taken_units = _select_positions(units, size, seed_value)
     result = frame.iloc[positions].reset_index(drop=True)
@@ -201,4 +235,11 @@ def main(
         _fail(
             f"лимит {size} меньше самой маленькой целой сессии"
         )
-    return {"monitoring_umr_sample": result}
+    return {
+        "monitoring_umr_sample": result,
+        "sample_meta": _sample_meta(
+            unit=unit_kind, population_units=len(units), population_examples=total_examples,
+            sampled_units=taken_units, sampled_examples=taken_examples, size=size,
+            seed=seed_value, whole_sessions=keep_sessions, passthrough=False,
+        ),
+    }

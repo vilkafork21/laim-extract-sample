@@ -72,6 +72,7 @@ s1-t2    | вопрос      | ответ         | s1         | g1
 | Порт | Тип | Описание |
 |------|-----|----------|
 | `monitoring_umr_sample` | dataframe | Не более `sample_size` примеров. Подключается ко входу `monitoring_umr` ассесора |
+| `sample_meta` | default (JSON) | Провенанс выборки: `unit` (`packed_dialogue` / `session` / `row`), `population_units`, `population_examples`, `sampled_units`, `sampled_examples`, `fraction`, `sample_size`, `seed`, `whole_sessions`, `passthrough`. Подключается ко входу `sample_meta` агрегатора |
 
 ## Примеры
 

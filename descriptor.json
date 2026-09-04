@@ -24,6 +24,15 @@
       "order": 2,
       "type": "dataframe",
       "shape": "shape_dataframe"
+    },
+    {
+      "name": "sample_meta",
+      "label": "Провенанс выборки",
+      "description": "Единица отбора, население и отобранное число единиц и примеров, доля, seed; подключить ко входу sample_meta агрегатора",
+      "order": 3,
+      "type": "default",
+      "shape": "shape_model",
+      "in": false
     }
   ],
   "script": {
