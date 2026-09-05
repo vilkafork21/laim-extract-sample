@@ -49,8 +49,8 @@ def packed_umr(sessions: dict[str, int]) -> pd.DataFrame:
 
 def test_flat_whole_sessions_not_cut():
     frame = flat_umr({"s1": 2, "s2": 3, "s3": 4, "s4": 2})
-    result = node.main(monitoring_umr=frame, sample_size=5)["monitoring_umr_sample"]
-    assert len(result) <= 5
+    result = node.main(monitoring_umr=frame, sample_size=2)["monitoring_umr_sample"]
+    assert result["session_id"].nunique() == 2
     taken = result.groupby("session_id").size().to_dict()
     for session_id, count in taken.items():
         assert count == frame.groupby("session_id").size()[session_id], (
@@ -59,22 +59,22 @@ def test_flat_whole_sessions_not_cut():
     assert list(result.columns) == list(frame.columns)
 
 
-def test_packed_limit_counts_turns():
+def test_packed_limit_counts_sessions():
     frame = packed_umr({"s1": 3, "s2": 3, "s3": 3, "s4": 3})
-    result = node.main(monitoring_umr=frame, sample_size=7)["monitoring_umr_sample"]
+    result = node.main(monitoring_umr=frame, sample_size=2)["monitoring_umr_sample"]
     total_turns = sum(len(dialogue) for dialogue in result["dialogue"])
-    assert total_turns <= 7
-    assert 1 <= len(result) < len(frame)
+    assert total_turns == 6
+    assert len(result) == 2
 
 
-def test_packed_repr_from_converter_counts_turns():
+def test_packed_repr_preserves_all_turns_in_selected_sessions():
     frame = packed_umr({"s1": 3, "s2": 3, "s3": 3, "s4": 3})
     frame["dialogue"] = frame["dialogue"].map(repr)
 
-    result = node.main(monitoring_umr=frame, sample_size=7)["monitoring_umr_sample"]
+    result = node.main(monitoring_umr=frame, sample_size=2)["monitoring_umr_sample"]
 
-    assert sum(len(ast.literal_eval(dialogue)) for dialogue in result["dialogue"]) <= 7
-    assert 1 <= len(result) < len(frame)
+    assert sum(len(ast.literal_eval(dialogue)) for dialogue in result["dialogue"]) == 6
+    assert len(result) == 2
 
 
 def test_invalid_packed_dialogue_fails_closed():
@@ -84,21 +84,21 @@ def test_invalid_packed_dialogue_fails_closed():
         node.main(monitoring_umr=frame, sample_size=1)
 
 
-def test_oversized_session_does_not_block_smaller_session():
+def test_session_length_does_not_limit_inclusion():
     frame = packed_umr({"large": 4, "small": 2})
 
     result = node.main(
         monitoring_umr=frame, sample_size=2, seed=0
     )["monitoring_umr_sample"]
 
-    assert result["session_id"].tolist() == ["small"]
+    assert result["session_id"].tolist() == ["large", "small"]
 
 
-def test_only_oversized_session_fails_loudly():
+def test_single_long_session_is_preserved():
     frame = packed_umr({"large": 4})
 
-    with pytest.raises(ValueError, match="меньше самой маленькой"):
-        node.main(monitoring_umr=frame, sample_size=2)
+    result = node.main(monitoring_umr=frame, sample_size=1)["monitoring_umr_sample"]
+    pd.testing.assert_frame_equal(result, frame)
 
 
 def test_deterministic_and_seed_sensitive():
@@ -183,7 +183,8 @@ def test_sample_meta_reports_population_and_selection():
     frame = flat_umr({f"s{i}": 1 for i in range(20)})
     passthrough = node.main(monitoring_umr=frame, sample_size=50)
     assert passthrough["sample_meta"] == {
-        "unit": "session", "population_units": 20, "population_examples": 20,
+        "unit": "session", "design": "hash_srs_units_v1", "inclusion_probability": 1.0,
+        "population_units": 20, "population_examples": 20,
         "sampled_units": 20, "sampled_examples": 20, "fraction": 1.0,
         "sample_size": 50, "seed": 42, "whole_sessions": True, "passthrough": True,
     }

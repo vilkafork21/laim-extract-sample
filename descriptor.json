@@ -2,7 +2,7 @@
   "id": "7d9c1b7e-4a52-4b0e-9a37-c4f0f3ad61b5",
   "name": "LAIM Extract Sample",
   "description": "Детерминированное сэмплирование UMR перед LLM-ассесором",
-  "fullDescription": "Нода ставится между конвертером трейсов (выход monitoring_umr) и LAIM Asessor Agent (вход monitoring_umr): пропускает не более заданного числа примеров, схему и содержимое строк не меняет. Пример — turn диалога: в packed-форме (колонка dialogue) это элемент списка turns, в плоской — строка датафрейма. Отбор равномерный и воспроизводимый: сессии ранжируются по sha256 от зерна и идентификатора и набираются, пока влезают в лимит целиком; диалог не режется (packed-строка всегда берётся целиком; для плоской формы это отключается настройкой). Если примеров на входе не больше лимита или лимит равен 0 — выборка передаётся без изменений.",
+  "fullDescription": "Отбирает заданное число целых единиц UMR по хешу seed и устойчивого ключа: сессии для packed и whole_sessions=true, отдельные строки иначе. Длина сессии не влияет на включение. sample_size ограничивает число единиц, а не число turns или токены; 0 передаёт все данные. Содержимое строк сохраняется.",
   "shortNameToDisplay": "Extract Sample",
   "shape": "other",
   "ports": [
@@ -20,7 +20,7 @@
       "in": false,
       "name": "monitoring_umr_sample",
       "label": "Monitoring UMR (sample)",
-      "description": "Не более заданного числа примеров; подключить ко входу monitoring_umr ассесора",
+      "description": "До sample_size целых единиц отбора; число turns может быть больше. Вход monitoring_umr ассесора.",
       "order": 2,
       "type": "dataframe",
       "shape": "shape_dataframe"
@@ -67,7 +67,7 @@
               "components": [
                 {
                   "parameter": "sample_size",
-                  "label": "Примеров ассесору (0 = все)",
+                  "label": "Единиц отбора: сессий или строк (0 = все)",
                   "uiComponent": "input",
                   "type": "integer",
                   "defaultValue": 1000
