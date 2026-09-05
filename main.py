@@ -1,22 +1,17 @@
-"""LAIM Extract Sample — детерминированное сэмплирование UMR перед ассесором.
+"""Детерминированная выборка целых единиц UMR перед ассесором.
 
-Нода ставится между конвертером трейсов (OUT monitoring_umr) и LAIM Asessor
-Agent (IN monitoring_umr): пропускает не более sample_size примеров, схему и
-содержимое строк не меняет. Пример — turn диалога: в packed-форме (колонка
-``dialogue``) это элемент списка turns, в плоской форме — строка датафрейма.
-
-Отбор равномерный и воспроизводимый: единицы отбора ранжируются по
-sha256(f"{seed}:{ключ}") и набираются по возрастанию хеша, пока влезают в
-лимит целиком; сессия, не влезающая целиком, не берётся (при
-whole_sessions=true диалог не режется). Результат не зависит от порядка строк
-на входе и повторяется от запуска к запуску.
+sample_size ограничивает число единиц отбора: packed dialogue, сессий
+или отдельных строк. Размер сессии не влияет на включение. Порядок задаётся
+sha256 от seed и устойчивого ключа; исходное содержимое строк сохраняется.
 """
 
 from __future__ import annotations
 
 import ast
 import hashlib
+import heapq
 import io
+import json
 import logging
 import re
 from pathlib import Path
@@ -106,7 +101,9 @@ def _sampling_units(
         for position in range(len(frame)):
             row = frame.iloc[position]
             session = row["session_id"] if "session_id" in frame.columns else None
-            key = f"row-{position}" if _blank(session) else str(session)
+            if _blank(session):
+                _fail(f"session_id в строке {position + 1} пуст: нужен устойчивый ключ")
+            key = str(session)
             units.append((key, [position], _dialogue_len(row["dialogue"], position + 1)))
         return units, "packed_dialogue"
     if "query_id" not in frame.columns:
@@ -122,19 +119,22 @@ def _sampling_units(
         units_by_key: dict[str, list[int]] = {}
         for position in range(len(frame)):
             group = frame.iloc[position][group_column]
-            key = f"row-{position}" if _blank(group) else str(group)
+            if _blank(group):
+                _fail(f"{group_column} в строке {position + 1} пуст: граница группы неизвестна")
+            key = str(group)
             units_by_key.setdefault(key, []).append(position)
         units = [(key, positions, len(positions)) for key, positions in units_by_key.items()]
         return units, "session"
+    query_ids = frame["query_id"].tolist()
+    if any(_blank(value) for value in query_ids):
+        _fail("query_id содержит пустой ключ единицы отбора")
+    identity_column = next(
+        (name for name in ("session_id", "reference_group_id") if name in frame), None,
+    )
+    groups = frame[identity_column].tolist() if identity_column else [None] * len(frame)
     units = [
-        (
-            f"row-{position}"
-            if _blank(frame.iloc[position]["query_id"])
-            else str(frame.iloc[position]["query_id"]),
-            [position],
-            1,
-        )
-        for position in range(len(frame))
+        (json.dumps([None if _blank(group) else str(group), str(query_id)]), [position], 1)
+        for position, (group, query_id) in enumerate(zip(groups, query_ids))
     ]
     return units, "row"
 
@@ -143,25 +143,15 @@ def _select_positions(
     units: list[tuple[str, list[int], int]], sample_size: int, seed: int
 ) -> tuple[list[int], int, int]:
     """Позиции отобранных строк, число взятых примеров и число взятых единиц."""
-    ranked = sorted(
-        units,
+    ranked = heapq.nsmallest(
+        sample_size, units,
         key=lambda unit: (
-            hashlib.sha256(f"{seed}:{unit[0]}".encode("utf-8")).hexdigest(),
+            hashlib.sha256(f"{seed}:{unit[0]}".encode("utf-8")).digest(),
             unit[0],
         ),
     )
-    selected: list[int] = []
-    taken_examples = 0
-    taken_units = 0
-    budget = sample_size
-    for _, positions, examples in ranked:
-        if examples > budget:
-            continue
-        selected.extend(positions)
-        budget -= examples
-        taken_examples += examples
-        taken_units += 1
-    return sorted(selected), taken_examples, taken_units
+    selected = [position for _, positions, _ in ranked for position in positions]
+    return sorted(selected), sum(examples for _, _, examples in ranked), len(ranked)
 
 
 def _sample_meta(
@@ -171,6 +161,8 @@ def _sample_meta(
     """Провенанс выборки для агрегатора и отчёта: что было и что отобрано."""
     return {
         "unit": unit,
+        "design": "hash_srs_units_v1",
+        "inclusion_probability": sampled_units / population_units if population_units else None,
         "population_units": population_units,
         "population_examples": population_examples,
         "sampled_units": sampled_units,
@@ -190,7 +182,7 @@ def main(
     whole_sessions: bool = True,
     **_ignored: object,
 ) -> dict[str, object]:
-    """Отдать ассесору не более sample_size примеров исходного UMR и провенанс выборки."""
+    """Отдать не более sample_size целых единиц и провенанс выборки."""
     frame = _load_df(monitoring_umr)
     size = _parse_int(sample_size, "sample_size", minimum=0)
     seed_value = _parse_int(seed, "seed", minimum=-(2**63))
@@ -209,10 +201,13 @@ def main(
 
     units, unit_kind = _sampling_units(frame, keep_sessions)
     total_examples = sum(examples for _, _, examples in units)
-    if size == 0 or total_examples <= size:
+    keys = [key for key, _, _ in units]
+    if len(keys) != len(set(keys)):
+        _fail("ключи единиц отбора должны быть уникальны")
+    if size == 0 or len(units) <= size:
         logger.info(
-            "примеров на входе %d, лимит %s — выборка передана целиком",
-            total_examples, size or "нет",
+            "единиц на входе %d, лимит %s — выборка передана целиком",
+            len(units), size or "нет",
         )
         return {
             "monitoring_umr_sample": frame,
@@ -231,10 +226,6 @@ def main(
         taken_examples, total_examples, len(result), len(frame),
         taken_units, len(units), seed_value,
     )
-    if not positions:
-        _fail(
-            f"лимит {size} меньше самой маленькой целой сессии"
-        )
     return {
         "monitoring_umr_sample": result,
         "sample_meta": _sample_meta(
